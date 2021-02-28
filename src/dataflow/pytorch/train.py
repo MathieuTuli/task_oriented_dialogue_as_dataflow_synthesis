@@ -9,10 +9,10 @@ from datetime import datetime
 from pathlib import Path
 
 import time
-import sys
 
 from onmt.utils.logging import init_logger, logger
 
+from torch.optim.lr_scheduler import StepLR, CosineAnnealingWarmRestarts
 import torch.backends.cudnn as cudnn
 import torch.multiprocessing as mp
 import torch.distributed as dist
@@ -21,7 +21,10 @@ import numpy as np
 import torch
 import yaml
 
+from dataflow.pytorch.optim import get_optimizer_scheduler
+from dataflow.pytorch.models import get_model
 from dataflow.pytorch.args import train_args
+from dataflow.pytorch.data import get_data
 
 parser = ArgumentParser(description="train.py")
 train_args(parser)
@@ -100,33 +103,33 @@ class TrainingAgent:
         if config is None:
             config = self.config
         self.performance_statistics = dict()
-        self.network = get_network(name=config['network'],
-                                   num_classes=self.num_classes)
+        self.model = get_model(name=config['network'],
+                               num_classes=self.num_classes)
         # TODO add other parallelisms
         if self.device == 'cpu':
             ...
         elif self.dist:
             if self.gpu is not None:
                 torch.cuda.set_device(self.gpu)
-                self.network.cuda(self.gpu)
-                self.network = torch.nn.parallel.DistributedDataParallel(
-                    self.network,
+                self.model.cuda(self.gpu)
+                self.model = torch.nn.parallel.DistributedDataParallel(
+                    self.model,
                     device_ids=[self.gpu])
             else:
-                self.network.cuda()
-                self.network = torch.nn.parallel.DistributedDataParallel(
-                    self.network)
+                self.model.cuda()
+                self.model = torch.nn.parallel.DistributedDataParallel(
+                    self.model)
         elif self.gpu is not None:
             torch.cuda.set_device(self.gpu)
-            self.network = self.network.cuda(self.gpu)
+            self.model = self.model.cuda(self.gpu)
         else:
-            self.network = torch.nn.DataParallel(self.network)
+            self.model = torch.nn.DataParallel(self.model)
         self.optimizer, self.scheduler = get_optimizer_scheduler(
             optim_method=config['optimizer'],
             lr_scheduler=config['scheduler'],
             init_lr=config['init_lr'],
-            net_parameters=self.network.parameters(),
-            listed_params=list(self.network.parameters()),
+            net_parameters=self.model.parameters(),
+            listed_params=list(self.model.parameters()),
             train_loader_len=len(self.train_loader),
             max_epochs=config['max_epochs'],
             optimizer_kwargs=config['optimizer_kwargs'],
@@ -187,7 +190,7 @@ class TrainingAgent:
                 data = {'epoch': epoch + 1,
                         'trial': trial,
                         'config': self.config,
-                        'state_dict_network': self.network.state_dict(),
+                        'state_dict_network': self.model.state_dict(),
                         'state_dict_optimizer': self.optimizer.state_dict(),
                         'state_dict_scheduler': self.scheduler.state_dict(),
                         'best_acc': self.best_acc,
@@ -204,7 +207,7 @@ class TrainingAgent:
         torch.save(data, str(self.checkpoint_path / 'last.pth.tar'))
 
     def epoch_iteration(self, trial: int, epoch: int):
-        self.network.train()
+        self.model.train()
         train_loss = 0
         joint_ba = AverageMeter()
 
@@ -217,7 +220,7 @@ class TrainingAgent:
             if isinstance(self.scheduler, CosineAnnealingWarmRestarts):
                 self.scheduler.step(epoch + batch_idx / len(self.train_loader))
             self.optimizer.zero_grad()
-            outputs = self.network(inputs)
+            outputs = self.model(inputs)
             loss = self.criterion(outputs, targets)
             loss.backward()
             self.optimizer.step()
@@ -225,8 +228,6 @@ class TrainingAgent:
             train_loss += loss.item()
             acc = accuracy(outputs, targets, (1, 5))
             joint_ba.update(acc, inputs.size(0))
-            if isinstance(self.scheduler, OneCycleLR):
-                self.scheduler.step()
         self.performance_statistics[f'train_joint_ba_epoch_{epoch}'] = \
             joint_ba.avg.cpu().item() / 100.
         self.performance_statistics[f'train_loss_epoch_{epoch}'] = \
@@ -237,7 +238,7 @@ class TrainingAgent:
         return train_loss / (batch_idx + 1), joint_ba.avg.cpu().item() / 100
 
     def validate(self, epoch: int):
-        self.network.eval()
+        self.model.eval()
         val_loss = 0
         joint_ba = AverageMeter()
         with torch.no_grad():
@@ -246,7 +247,7 @@ class TrainingAgent:
                     inputs = inputs.cuda(self.gpu, non_blocking=True)
                 if self.device == 'cuda':
                     targets = targets.cuda(self.gpu, non_blocking=True)
-                outputs = self.network(inputs)
+                outputs = self.model(inputs)
                 loss = self.criterion(outputs, targets)
                 val_loss += loss.item()
                 acc = accuracy(outputs, targets, topk=(1, 5))
