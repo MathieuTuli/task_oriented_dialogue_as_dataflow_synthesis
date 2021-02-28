@@ -1,3 +1,8 @@
+"""
+Author: Mathieu Tuli
+GitHub: @MathieuTuli
+Email: tuli.mathieu@gmail.com
+"""
 from argparser import ArgumentParser
 
 

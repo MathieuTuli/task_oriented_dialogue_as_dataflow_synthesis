@@ -1,3 +1,9 @@
+"""
+Author: Mathieu Tuli
+Date: 27-02-2021
+GitHub: @MathieuTuli
+Email: tuli.mathieu@gmail.com
+"""
 from dataflow.pytorch.models.base import BaseTransformer
 
 import torch

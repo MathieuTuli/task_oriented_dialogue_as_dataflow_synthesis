@@ -1,6 +1,5 @@
 """
 Author: Mathieu Tuli
-Date: 27-02-2021
 GitHub: @MathieuTuli
 Email: tuli.mathieu@gmail.com
 """
@@ -240,13 +239,9 @@ class TrainingAgent:
     def validate(self, epoch: int):
         self.network.eval()
         val_loss = 0
-        # correct = 0
-        # total = 0
         joint_ba = AverageMeter()
         with torch.no_grad():
             for batch_idx, (inputs, targets) in enumerate(self.val_loader):
-                # inputs, targets = \
-                #     inputs.to(self.device), targets.to(self.device)
                 if self.gpu is not None:
                     inputs = inputs.cuda(self.gpu, non_blocking=True)
                 if self.device == 'cuda':
