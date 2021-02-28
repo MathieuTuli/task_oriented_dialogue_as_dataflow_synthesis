@@ -40,7 +40,6 @@ class TrainingAgent:
     optimizer: torch.optim.Optimizer = None
     scheduler = None
     loss = None
-    output_filename: Path = None
     checkpoint = None
 
     def __init__(
@@ -102,7 +101,6 @@ class TrainingAgent:
     def reset(self, config: Optional[Dict[str, Any]] = None) -> None:
         if config is None:
             config = self.config
-        self.performance_statistics = dict()
         self.model = get_model(name=config['network'],
                                num_classes=self.num_classes)
         # TODO add other parallelisms
@@ -142,22 +140,6 @@ class TrainingAgent:
                            self.config['n_trials']):
             self.reset(self.config)
             epochs = range(0, self.config['max_epochs'])
-            self.output_filename = \
-                "train_results_" +\
-                f"date={self.date}_" +\
-                f"trial={trial}_" +\
-                f"network={self.config['network']}_" +\
-                f"dataset={self.config['dataset']}_" +\
-                f"optimizer={self.config['optimizer']}_" +\
-                '_'.join([f"{k}={v}" for k, v in
-                          self.config['optimizer_kwargs'].items()]) +\
-                f"_scheduler={self.config['scheduler']}_" +\
-                '_'.join([f"{k}={v}" for k, v in
-                          self.config['scheduler_kwargs'].items()]) +\
-                f"_lr={self.config['init_lr']}" +\
-                ".csv".replace(' ', '-')
-            self.output_filename = str(
-                self.output_path / self.output_filename)
             self.run_epochs(trial, epochs)
 
     def run_epochs(self, trial: int, epochs: List[int]) -> None:
@@ -183,8 +165,6 @@ class TrainingAgent:
                     train_loss) +
                 "Test Loss: {:.4f}% | ".format(
                     val_loss))
-            df = pd.DataFrame(data=self.performance_statistics)
-            df.to_csv(self.output_filename)
             if not self.mpd or \
                     (self.mpd and self.rank % self.ngpus_per_node == 0):
                 data = {'epoch': epoch + 1,
@@ -194,8 +174,6 @@ class TrainingAgent:
                         'state_dict_optimizer': self.optimizer.state_dict(),
                         'state_dict_scheduler': self.scheduler.state_dict(),
                         'best_acc': self.best_acc,
-                        'performance_statistics': self.performance_statistics,
-                        'output_filename': Path(self.output_filename).name,
                         'historical_metrics': self.metrics.historical_metrics}
                 if epoch % self.save_freq == 0:
                     filename = f'trial_{trial}.pth.tar'
@@ -223,18 +201,12 @@ class TrainingAgent:
             outputs = self.model(inputs)
             loss = self.criterion(outputs, targets)
             loss.backward()
+            # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 0.5)
             self.optimizer.step()
 
             train_loss += loss.item()
-            acc = accuracy(outputs, targets, (1, 5))
+            acc = accuracy(outputs, targets)
             joint_ba.update(acc, inputs.size(0))
-        self.performance_statistics[f'train_joint_ba_epoch_{epoch}'] = \
-            joint_ba.avg.cpu().item() / 100.
-        self.performance_statistics[f'train_loss_epoch_{epoch}'] = \
-            train_loss / (batch_idx + 1)
-        self.performance_statistics[
-            f'learning_rate_epoch_{epoch}'] = \
-            self.optimizer.param_groups[0]['lr']
         return train_loss / (batch_idx + 1), joint_ba.avg.cpu().item() / 100
 
     def validate(self, epoch: int):
@@ -250,13 +222,8 @@ class TrainingAgent:
                 outputs = self.model(inputs)
                 loss = self.criterion(outputs, targets)
                 val_loss += loss.item()
-                acc = accuracy(outputs, targets, topk=(1, 5))
+                acc = accuracy(outputs, targets)
                 joint_ba.update(acc, inputs.size(0))
-
-        self.performance_statistics[f'val_joint_ba_epoch_{epoch}'] = (
-            joint_ba.avg.cpu().item() / 100.)
-        self.performance_statistics[f'val_loss_epoch_{epoch}'] = val_loss / (
-            batch_idx + 1)
         return val_loss / (batch_idx + 1), joint_ba.avg.cpu().item() / 100
 
 
